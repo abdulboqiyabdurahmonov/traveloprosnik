@@ -13,7 +13,6 @@ SHEET_ID=...                            # Google Sheet spreadsheet ID
 OPTIONAL
 --------
 ADMINS=123456789,987654321              # кому слать алерты о новых анкетах
-WEBHOOK_SECRET=supersecret              # проверка секрета в заголовке
 TZ=Asia/Tashkent                        # таймзона для меток времени (по умолчанию Asia/Tashkent)
 
 Render: Старт-команда
@@ -49,7 +48,6 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBHOOK_URL = os.environ["WEBHOOK_URL"]
 SHEET_ID = os.environ["SHEET_ID"]
 SERVICE_JSON_RAW = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 ADMINS = [int(x) for x in os.getenv("ADMINS", "").replace(" ", "").split(",") if x]
 TZ = os.getenv("TZ", "Asia/Tashkent")
 
@@ -425,7 +423,6 @@ async def telegram_webhook(request: Request):
 async def on_startup():
     await bot.set_webhook(
         url=WEBHOOK_URL,
-        secret_token=WEBHOOK_SECRET if WEBHOOK_SECRET else None,
         drop_pending_updates=True,
     )
     log.info("Webhook set: %s", WEBHOOK_URL)
