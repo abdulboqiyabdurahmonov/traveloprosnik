@@ -416,10 +416,11 @@ def root():
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_SECRET:
-        if x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
-            raise HTTPException(status_code=403, detail="Bad secret header")
+    if WEBHOOK_SECRET and x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
+        log.warning("Bad secret header: got=%s", x_telegram_bot_api_secret_token)
+        raise HTTPException(status_code=403, detail="Bad secret header")
     update = await request.json()
+    log.info("Incoming update: %s", update)   # <— добавь эту строку
     await dp.feed_webhook_update(bot, update)
     return PlainTextResponse("ok")
 
