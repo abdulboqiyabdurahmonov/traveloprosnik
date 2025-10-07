@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: triplea-travel-survey
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn bot:app --host 0.0.0.0 --port 10000
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: WEBHOOK_URL
+        sync: false
+      - key: SHEET_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: ADMINS
+        sync: false
+      - key: TZ
+        value: Asia/Tashkent
