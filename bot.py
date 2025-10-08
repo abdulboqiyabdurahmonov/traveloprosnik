@@ -35,7 +35,7 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     Message, CallbackQuery,
-    ReplyKeyboardMarkup, KeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
     InlineKeyboardMarkup, InlineKeyboardButton
 )
 
@@ -155,7 +155,10 @@ async def start(m: Message, state: FSMContext):
 @rt.message(Command("cancel"))
 async def cancel(m: Message, state: FSMContext):
     await state.clear()
-    await m.answer("Ок, опрос отменён. Можно перезапустить через /start.")
+    await m.answer(
+        "Ок, опрос отменён. Можно перезапустить через /start.",
+        reply_markup=ReplyKeyboardRemove()
+    )
 
 @rt.message(Command("help"))
 async def help_cmd(m: Message):
@@ -225,16 +228,16 @@ async def toggle_multi(cb: CallbackQuery, state: FSMContext, key: str, options: 
     elif action == "done":
         await cb.answer("Выбор сохранён", show_alert=False)
 
-@rt.callback_query(Survey.leads_from, F.data.startswith("lead:"))
-async def leads_toggle(cb: CallbackQuery, state: FSMContext):
-    await toggle_multi(cb, state, "leads_from_idx", LEAD_CHANNELS, "lead")
-
 @rt.callback_query(Survey.leads_from, F.data == "lead:done")
 async def leads_done(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_reply_markup(reply_markup=None)
     await cb.message.answer("<b>6/17 — Сколько заявок в неделю?</b>", reply_markup=kb_rows(LEADS_PER_WEEK))
     await state.set_state(Survey.leads_week)
     await cb.answer()
+
+@rt.callback_query(Survey.leads_from, F.data.startswith("lead:toggle:"))
+async def leads_toggle(cb: CallbackQuery, state: FSMContext):
+    await toggle_multi(cb, state, "leads_from_idx", LEAD_CHANNELS, "lead")
 
 @rt.message(Survey.leads_week, F.text.in_(LEADS_PER_WEEK))
 async def q_leads_week(m: Message, state: FSMContext):
