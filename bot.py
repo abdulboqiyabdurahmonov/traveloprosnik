@@ -257,16 +257,16 @@ async def pay_open(cb: CallbackQuery):
     await cb.message.edit_text("<b>8/17 — Как принимаете оплаты?</b>", reply_markup=inline_multi(PAYMENT_METHODS, "paym"))
     await cb.answer()
 
-@rt.callback_query(Survey.pay, F.data.startswith("paym:"))
-async def pay_toggle(cb: CallbackQuery, state: FSMContext):
-    await toggle_multi(cb, state, "pay_idx", PAYMENT_METHODS, "paym")
-
 @rt.callback_query(Survey.pay, F.data == "paym:done")
 async def pay_done(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_reply_markup(reply_markup=None)
     await cb.message.answer("<b>9/17 — Онлайн-бронь есть?</b>", reply_markup=kb_rows(ONLINE_BOOKING))
     await state.set_state(Survey.booking)
     await cb.answer()
+
+@rt.callback_query(Survey.pay, F.data.startswith("paym:toggle:"))
+async def pay_toggle(cb: CallbackQuery, state: FSMContext):
+    await toggle_multi(cb, state, "pay_idx", PAYMENT_METHODS, "paym")
 
 @rt.message(Survey.booking, F.text.in_(ONLINE_BOOKING))
 async def q_booking(m: Message, state: FSMContext):
@@ -292,16 +292,16 @@ async def vals_open(cb: CallbackQuery):
     await cb.message.edit_text("<b>12/17 — Что важнее всего в агрегаторе?</b>", reply_markup=inline_multi(AGG_VALUES, "vals"))
     await cb.answer()
 
-@rt.callback_query(Survey.agg_values, F.data.startswith("vals:"))
-async def vals_toggle(cb: CallbackQuery, state: FSMContext):
-    await toggle_multi(cb, state, "vals_idx", AGG_VALUES, "vals")
-
 @rt.callback_query(Survey.agg_values, F.data == "vals:done")
 async def vals_done(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_reply_markup(reply_markup=None)
     await cb.message.answer("<b>13/17 — Монетизация: что вам ок?</b>", reply_markup=kb_rows(MONETIZATION))
     await state.set_state(Survey.monetization)
     await cb.answer()
+
+@rt.callback_query(Survey.agg_values, F.data.startswith("vals:toggle:"))
+async def vals_toggle(cb: CallbackQuery, state: FSMContext):
+    await toggle_multi(cb, state, "vals_idx", AGG_VALUES, "vals")
 
 @rt.message(Survey.monetization, F.text.in_(MONETIZATION))
 async def q_monet(m: Message, state: FSMContext):
