@@ -433,3 +433,21 @@ async def on_shutdown():
         await bot.delete_webhook(drop_pending_updates=False)
     except Exception:
         pass
+
+# --- health endpoints ---
+from fastapi.responses import PlainTextResponse, JSONResponse
+from datetime import datetime
+
+@app.get("/", include_in_schema=False)
+async def root_health():
+    # HEAD тоже начнёт работать автоматически
+    return JSONResponse({"status": "ok", "service": "TravelOprosnik", "time": datetime.utcnow().isoformat()})
+
+@app.get("/healthz", include_in_schema=False)
+async def healthz():
+    return PlainTextResponse("ok", status_code=200)
+
+@app.get("/webhook", include_in_schema=False)
+async def webhook_ping():
+    return PlainTextResponse("ok", status_code=200)
+
