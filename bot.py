@@ -220,7 +220,7 @@ async def toggle_multi(cb: CallbackQuery, state: FSMContext, key: str, options: 
             mark = "✅" if i in picked else "▫️"
             rows.append([InlineKeyboardButton(text=f"{mark} {o}", callback_data=f"{prefix}:toggle:{i}")])
         rows.append([InlineKeyboardButton(text="✅ Готово", callback_data=f"{prefix}:done")])
-        await cb.message.edit_reply_markup(InlineKeyboardMarkup(inline_keyboard=rows))
+        await cb.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
         await cb.answer()
     elif action == "done":
         await cb.answer("Выбор сохранён", show_alert=False)
@@ -231,6 +231,7 @@ async def leads_toggle(cb: CallbackQuery, state: FSMContext):
 
 @rt.callback_query(Survey.leads_from, F.data == "lead:done")
 async def leads_done(cb: CallbackQuery, state: FSMContext):
+    await cb.message.edit_reply_markup(reply_markup=None)
     await cb.message.answer("<b>6/17 — Сколько заявок в неделю?</b>", reply_markup=kb_rows(LEADS_PER_WEEK))
     await state.set_state(Survey.leads_week)
     await cb.answer()
@@ -259,6 +260,7 @@ async def pay_toggle(cb: CallbackQuery, state: FSMContext):
 
 @rt.callback_query(Survey.pay, F.data == "paym:done")
 async def pay_done(cb: CallbackQuery, state: FSMContext):
+    await cb.message.edit_reply_markup(reply_markup=None)
     await cb.message.answer("<b>9/17 — Онлайн-бронь есть?</b>", reply_markup=kb_rows(ONLINE_BOOKING))
     await state.set_state(Survey.booking)
     await cb.answer()
@@ -293,6 +295,7 @@ async def vals_toggle(cb: CallbackQuery, state: FSMContext):
 
 @rt.callback_query(Survey.agg_values, F.data == "vals:done")
 async def vals_done(cb: CallbackQuery, state: FSMContext):
+    await cb.message.edit_reply_markup(reply_markup=None)
     await cb.message.answer("<b>13/17 — Монетизация: что вам ок?</b>", reply_markup=kb_rows(MONETIZATION))
     await state.set_state(Survey.monetization)
     await cb.answer()
