@@ -33,11 +33,16 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
+# --- импорт дополните ---
 from aiogram.types import (
     Message, CallbackQuery,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
-    InlineKeyboardMarkup, InlineKeyboardButton
+    ReplyKeyboardMarkup, KeyboardButton,
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardRemove,   # <— добавили
 )
+
+# Удобная константа
+HIDE_KB = ReplyKeyboardRemove(remove_keyboard=True)
 
 import gspread
 from datetime import datetime
@@ -257,13 +262,13 @@ async def get_lang(state: FSMContext) -> str:
 @rt.message(CommandStart())
 async def start(m: Message, state: FSMContext):
     await state.clear()
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t("lang_ru", RU), callback_data="lang:ru"),
-        InlineKeyboardButton(text=t("lang_uz", UZ), callback_data="lang:uz"),
-    ]])
-    # Показываем на двух языках приглашение к выбору
-    await m.answer(f"{t('choose_lang', RU)}\n{t('choose_lang', UZ)}", reply_markup=kb)
-    await state.set_state(Survey.lang)
+    await m.answer(
+        "Привет! Это опрос для турфирм об их процессах и интересе к агрегатору.\n"
+        "Займёт 2–3 минуты. Можно остановиться командой /cancel.\n\n"
+        "<b>1/17 — Название вашей компании?</b>",
+        reply_markup=HIDE_KB,   # <— убираем любые старые клавиатуры
+    )
+    await state.set_state(Survey.company)
 
 @rt.callback_query(Survey.lang, F.data.in_(["lang:ru", "lang:uz"]))
 async def pick_lang(cb: CallbackQuery, state: FSMContext):
@@ -276,9 +281,8 @@ async def pick_lang(cb: CallbackQuery, state: FSMContext):
 
 @rt.message(Command("cancel"))
 async def cancel(m: Message, state: FSMContext):
-    lang = await get_lang(state)
     await state.clear()
-    await m.answer(t("cancelled", lang), reply_markup=ReplyKeyboardRemove())
+    await m.answer("Ок, опрос отменён. Можно перезапустить через /start.", reply_markup=HIDE_KB)
 
 @rt.message(Command("help"))
 async def help_cmd(m: Message, state: FSMContext):
@@ -451,38 +455,38 @@ async def vals_toggle(cb: CallbackQuery, state: FSMContext):
     lang = await get_lang(state)
     await toggle_multi(cb, state, "vals_idx", opts("AGG_VALUES", lang), "vals")
 
-@rt.message(Survey.monetization, F.text.func(lambda v: v in OPTIONS["MONETIZATION"][RU] + OPTIONS["MONETIZATION"][UZ]))
+@rt.message(Survey.monetization, F.text.in_(MONETIZATION))
 async def q_monet(m: Message, state: FSMContext):
-    lang = await get_lang(state)
     await state.update_data(monetization=m.text)
-    await m.answer(t("q_ins1", lang))
+    # Переходим к свободному ответу — ОБЯЗАТЕЛЬНО убираем клавиатуру
+    await m.answer(
+        "<b>14/17 — Если бы была «волшебная кнопка» автоматизации — что бы она делала?</b>\n(свободный ответ)",
+        reply_markup=HIDE_KB
+    )
     await state.set_state(Survey.insight1)
 
 @rt.message(Survey.insight1)
 async def q_ins1(m: Message, state: FSMContext):
-    lang = await get_lang(state)
-    if not m.text or m.text.lower() in {"отменить", "bekor qilish"}:
+    if not m.text or m.text.lower() == "отменить":
         return await cancel(m, state)
     await state.update_data(free_insight_1=m.text.strip())
-    await m.answer(t("q_ins2", lang))
+    await m.answer("<b>15/17 — Что больше всего раздражает в работе с клиентами?</b>", reply_markup=HIDE_KB)
     await state.set_state(Survey.insight2)
 
 @rt.message(Survey.insight2)
 async def q_ins2(m: Message, state: FSMContext):
-    lang = await get_lang(state)
-    if not m.text or m.text.lower() in {"отменить", "bekor qilish"}:
+    if not m.text or m.text.lower() == "отменить":
         return await cancel(m, state)
     await state.update_data(free_insight_2=m.text.strip())
-    await m.answer(t("q_ins3", lang))
+    await m.answer("<b>16/17 — Какой самый частый вопрос от клиента?</b>", reply_markup=HIDE_KB)
     await state.set_state(Survey.insight3)
 
 @rt.message(Survey.insight3)
 async def q_ins3(m: Message, state: FSMContext):
-    lang = await get_lang(state)
-    if not m.text or m.text.lower() in {"отменить", "bekor qilish"}:
+    if not m.text or m.text.lower() == "отменить":
         return await cancel(m, state)
     await state.update_data(free_insight_3=m.text.strip())
-    await m.answer(t("q_contact", lang))
+    await m.answer("<b>17/17 — Контакт для связи</b> (телефон или @username)", reply_markup=HIDE_KB)
     await state.set_state(Survey.contact)
 
 def normalize_contact(txt: str) -> str:
