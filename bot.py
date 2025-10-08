@@ -3,25 +3,17 @@
 TripleA Travel Survey Bot — короткий опрос для турфирм (RU/UZ).
 Стек: FastAPI (webhook), Aiogram v3, gspread (Google Sheets), Render-ready.
 
-ENV VARS REQUIRED
------------------
-BOT_TOKEN=...                           # Telegram bot token
+ENV VARS
+BOT_TOKEN=...
 WEBHOOK_URL=https://your-service.onrender.com/webhook
-GOOGLE_SERVICE_ACCOUNT_JSON=...         # raw JSON of service account (в одну строку)
-SHEET_ID=...                            # Google Sheet spreadsheet ID
+GOOGLE_SERVICE_ACCOUNT_JSON=...   # raw JSON в одну строку
+SHEET_ID=...
+ADMINS=123,456 (опц.)
+TZ=Asia/Tashkent (опц.)
 
-OPTIONAL
---------
-ADMINS=123456789,987654321              # кому слать алерты о новых анкетах
-TZ=Asia/Tashkent                        # таймзона (по умолчанию Asia/Tashkent)
-
-Запуск на Render:
-uvicorn bot:app --host 0.0.0.0 --port 10000
+Запуск: uvicorn bot:app --host 0.0.0.0 --port 10000
 """
-
-import os
-import json
-import logging
+import os, json, logging
 from typing import Dict, List
 
 from fastapi import FastAPI, Request
@@ -51,7 +43,6 @@ SERVICE_JSON_RAW = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
 ADMINS = [int(x) for x in os.getenv("ADMINS", "").replace(" ", "").split(",") if x]
 TZ = os.getenv("TZ", "Asia/Tashkent")
 
-# ---------- Логи ----------
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("triplea.survey")
 
@@ -70,30 +61,27 @@ except gspread.WorksheetNotFound:
         "contact"
     ])
 
-# ---------- RU/UZ тексты и опции ----------
-RU = "ru"
-UZ = "uz"
+# ---------- Тексты/опции ----------
+RU, UZ = "ru", "uz"
 
 TEXT: Dict[str, Dict[str, str]] = {
     "choose_lang": {RU: "Выберите язык ⤵️", UZ: "Tilni tanlang ⤵️"},
     "lang_ru": {RU: "Русский", UZ: "Ruscha"},
     "lang_uz": {RU: "Узбекский", UZ: "O‘zbekcha"},
-    # Расширенное приветствие: кто мы и что предлагаем
     "welcome": {
         RU: (
             "<b>Мы — TripleA Travel</b> (стартап из Узбекистана). "
             "Делаем <b>Telegram-агрегатор заявок</b> для турфирм: единая лента лидов, быстрые шаблоны ответов, "
             "онлайн-оплата и базовая аналитика. Ищем 10–15 пилотных агентств, чтобы собрать обратную связь и "
             "запустить бесплатный MVP на месяц.\n\n"
-            "Короткий опрос (5 вопросов) про интерес, боли и ожидания. Можно остановиться командой /cancel.\n\n"
+            "Короткий опрос (5 вопросов) — интерес, боли, ожидания. Можно остановиться /cancel.\n\n"
             "<b>1/5 — Интересен ли агрегатор в Telegram?</b>"
         ),
         UZ: (
             "<b>Biz — TripleA Travel</b> (O‘zbekiston startapi). "
-            "Turfirmalar uchun <b>Telegramda arizalar agregatori</b> qilmoqdamiz: yagona lead-lenta, tezkor javob "
-            "shablonlari, onlayn to‘lov va oddiy analitika. Pilot uchun 10–15 ta agentlik izlaymiz, fikr-mulohaza "
-            "to‘plash va 1 oylik bepul MVP ishga tushirish uchun.\n\n"
-            "Qisqa so‘rov (5 ta savol): qiziqish, og‘riqlar va kutilyotgan natijalar. /cancel bilan to‘xtatish mumkin.\n\n"
+            "Turfirmalar uchun <b>Telegramda arizalar agregatori</b>: yagona lead-lenta, tezkor javob shablonlari, "
+            "onlayn to‘lov va oddiy analitika. Pilot uchun 10–15 ta agentlik izlaymiz va 1 oylik bepul MVP ishga tushiramiz.\n\n"
+            "Qisqa so‘rov (5 ta savol): qiziqish, og‘riqlar, kutilyotgan natijalar. /cancel bilan to‘xtatish mumkin.\n\n"
             "<b>1/5 — Telegramdagi agregator sizga qiziqmi?</b>"
         ),
     },
@@ -133,6 +121,10 @@ TEXT: Dict[str, Dict[str, str]] = {
     "done": {RU: "✅ Готово", UZ: "✅ Tayyor"},
     "saved_choice": {RU: "Выбор сохранён", UZ: "Tanlov saqlandi"},
     "cancel_btn": {RU: "Отменить", UZ: "Bekor qilish"},
+    "need_text": {
+        RU: "Пожалуйста, введите текст (не стикер/фото).",
+        UZ: "Iltimos, matn yuboring (stiker/foto emas).",
+    },
 }
 
 OPTIONS = {
@@ -148,8 +140,8 @@ OPTIONS = {
     },
 }
 
-# предсчитанные множества для фильтров (исключает «зависание»)
 AGG_INT_ALL = tuple(OPTIONS["AGG_INT"][RU] + OPTIONS["AGG_INT"][UZ])
+HIDE_KB = ReplyKeyboardRemove(remove_keyboard=True)
 
 # ---------- FSM ----------
 class Survey(StatesGroup):
@@ -160,53 +152,41 @@ class Survey(StatesGroup):
     expect = State()
     contact = State()
 
-# ---------- Телега ----------
+# ---------- Бот ----------
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 rt = Router()
 dp.include_router(rt)
 
 # ---------- Утилиты ----------
-HIDE_KB = ReplyKeyboardRemove(remove_keyboard=True)
-
-def t(key: str, lang: str) -> str:
-    return TEXT[key][lang]
-
-def opts(name: str, lang: str) -> List[str]:
-    return OPTIONS[name][lang]
-
-def kb_rows(options: List[str], lang: str, row: int = 2) -> ReplyKeyboardMarkup:
-    btns: List[List[KeyboardButton]] = []
-    chunk: List[KeyboardButton] = []
-    for i, o in enumerate(options, 1):
-        chunk.append(KeyboardButton(text=o))
-        if i % row == 0:
-            btns.append(chunk); chunk = []
-    if chunk:
-        btns.append(chunk)
-    btns.append([KeyboardButton(text=t("cancel_btn", lang))])
-    return ReplyKeyboardMarkup(keyboard=btns, resize_keyboard=True)
-
-def inline_multi(options: List[str], lang: str, prefix: str) -> InlineKeyboardMarkup:
-    rows: List[List[InlineKeyboardButton]] = []
-    for i, o in enumerate(options):
-        rows.append([InlineKeyboardButton(text=f"▫️ {o}", callback_data=f"{prefix}:toggle:{i}")])
-    rows.append([InlineKeyboardButton(text=t("done", lang), callback_data=f"{prefix}:done")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-def now_ts() -> str:
-    return datetime.now(ZoneInfo(TZ)).strftime("%Y-%m-%d %H:%M:%S")
+def t(key: str, lang: str) -> str: return TEXT[key][lang]
+def opts(name: str, lang: str) -> List[str]: return OPTIONS[name][lang]
+def now_ts() -> str: return datetime.now(ZoneInfo(TZ)).strftime("%Y-%m-%d %H:%M:%S")
 
 async def get_lang(state: FSMContext) -> str:
     data = await state.get_data()
     return data.get("lang", RU)
 
+def kb_rows(options: List[str], lang: str, row: int = 2) -> ReplyKeyboardMarkup:
+    btns, chunk = [], []
+    for i, o in enumerate(options, 1):
+        chunk.append(KeyboardButton(text=o))
+        if i % row == 0:
+            btns.append(chunk); chunk = []
+    if chunk: btns.append(chunk)
+    btns.append([KeyboardButton(text=t("cancel_btn", lang))])
+    return ReplyKeyboardMarkup(keyboard=btns, resize_keyboard=True)
+
+def inline_multi(options: List[str], lang: str, prefix: str) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=f"▫️ {o}", callback_data=f"{prefix}:toggle:{i}")]
+            for i, o in enumerate(options)]
+    rows.append([InlineKeyboardButton(text=t("done", lang), callback_data=f"{prefix}:done")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 def normalize_contact(txt: str) -> str:
     t_ = (txt or "").strip()
-    if t_.startswith("+") and t_[1:].replace(" ", "").isdigit():
-        return t_
-    if t_.startswith("@") and len(t_) > 1:
-        return t_
+    if t_.startswith("+") and t_[1:].replace(" ", "").isdigit(): return t_
+    if t_.startswith("@") and len(t_) > 1: return t_
     digits = "".join(ch for ch in t_ if ch.isdigit() or ch == "+")
     return digits if digits else t_
 
@@ -214,7 +194,6 @@ def normalize_contact(txt: str) -> str:
 @rt.message(CommandStart())
 async def cmd_start(m: Message, state: FSMContext):
     await state.clear()
-    # выбор языка
     ikb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=TEXT["lang_ru"][RU], callback_data="lang:ru"),
         InlineKeyboardButton(text=TEXT["lang_uz"][UZ], callback_data="lang:uz"),
@@ -228,28 +207,16 @@ async def pick_lang(cb: CallbackQuery, state: FSMContext):
     lang = RU if cb.data.endswith("ru") else UZ
     await state.update_data(lang=lang)
     await cb.message.edit_reply_markup(reply_markup=None)
-    # Первый вопрос
-    await cb.message.answer(
-        t("welcome", lang),
-        reply_markup=kb_rows(opts("AGG_INT", lang), lang),
-    )
+    await cb.message.answer(t("welcome", lang), reply_markup=kb_rows(opts("AGG_INT", lang), lang))
     await state.set_state(Survey.agg_interest)
     await cb.answer()
 
 @rt.message(Command("cancel"))
 async def cancel(m: Message, state: FSMContext):
     await state.clear()
-    await m.answer(TEXT["cancelled"][RU], reply_markup=HIDE_KB)
+    await m.answer(TEXT["cancelled"][await get_lang(state)], reply_markup=HIDE_KB)
 
-@rt.message(Command("help"))
-async def help_cmd(m: Message, state: FSMContext):
-    lang = await get_lang(state)
-    txt = "Команды: /start — начать, /cancel — отменить." if lang == RU else \
-          "Buyruqlar: /start — boshlash, /cancel — bekor qilish."
-    await m.answer(txt)
-
-# ---------- Шаги ----------
-# 1) Интерес
+# ---------- Шаг 1: Интерес ----------
 @rt.message(Survey.agg_interest, F.text.in_(AGG_INT_ALL))
 async def step_agg_interest(m: Message, state: FSMContext):
     lang = await get_lang(state)
@@ -260,20 +227,12 @@ async def step_agg_interest(m: Message, state: FSMContext):
     await m.answer(t("q_vals_open", lang), reply_markup=open_btn)
     await state.set_state(Survey.agg_values)
 
-# Fallback на случай произвольного текста (чтобы бот не «молчал»)
 @rt.message(Survey.agg_interest)
 async def step_agg_interest_retry(m: Message, state: FSMContext):
     lang = await get_lang(state)
     await m.answer(t("q_agg_int", lang), reply_markup=kb_rows(opts("AGG_INT", lang), lang))
 
-# 2) Ценности (мультивыбор)
-@rt.callback_query(Survey.agg_values, F.data == "vals:open")
-async def vals_open(cb: CallbackQuery, state: FSMContext):
-    lang = await get_lang(state)
-    await cb.message.edit_text(t("q_vals_tap", lang),
-                               reply_markup=inline_multi(opts("AGG_VALUES", lang), lang, "vals"))
-    await cb.answer()
-
+# ---------- Шаг 2: Ценности (мультивыбор) ----------
 async def toggle_multi(cb: CallbackQuery, state: FSMContext, key: str, options: List[str], prefix: str):
     data = await state.get_data()
     picked: List[int] = data.get(key, [])
@@ -281,59 +240,67 @@ async def toggle_multi(cb: CallbackQuery, state: FSMContext, key: str, options: 
     _, action, idx = parts[0], parts[1], (int(parts[2]) if len(parts) > 2 else None)
 
     if action == "toggle" and idx is not None:
-        if idx in picked:
-            picked.remove(idx)
-        else:
-            picked.append(idx)
+        if idx in picked: picked.remove(idx)
+        else: picked.append(idx)
         await state.update_data(**{key: picked})
-        rows = []
-        for i, o in enumerate(options):
-            mark = "✅" if i in picked else "▫️"
-            rows.append([InlineKeyboardButton(text=f"{mark} {o}", callback_data=f"{prefix}:toggle:{i}")])
         lang = (await state.get_data()).get("lang", RU)
+        rows = [[InlineKeyboardButton(text=f"{'✅' if i in picked else '▫️'} {o}", callback_data=f"{prefix}:toggle:{i}")]
+                for i, o in enumerate(options)]
         rows.append([InlineKeyboardButton(text=t("done", lang), callback_data=f"{prefix}:done")])
-        # Именованный аргумент: иначе pydantic_core будет ругаться
         await cb.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
         await cb.answer()
     elif action == "done":
         lang = (await state.get_data()).get("lang", RU)
         await cb.answer(t("saved_choice", lang), show_alert=False)
 
+@rt.callback_query(Survey.agg_values, F.data == "vals:open")
+async def vals_open(cb: CallbackQuery, state: FSMContext):
+    lang = await get_lang(state)
+    await cb.message.edit_text(t("q_vals_tap", lang),
+                               reply_markup=inline_multi(opts("AGG_VALUES", lang), lang, "vals"))
+    await cb.answer()
+
 @rt.callback_query(Survey.agg_values, F.data.startswith("vals:toggle:"))
 async def vals_toggle(cb: CallbackQuery, state: FSMContext):
-    lang = await get_lang(state)
-    await toggle_multi(cb, state, "vals_idx", opts("AGG_VALUES", lang), "vals")
+    await toggle_multi(cb, state, "vals_idx", opts("AGG_VALUES", await get_lang(state)), "vals")
 
 @rt.callback_query(Survey.agg_values, F.data == "vals:done")
 async def vals_done(cb: CallbackQuery, state: FSMContext):
     lang = await get_lang(state)
     await cb.message.edit_reply_markup(reply_markup=None)
-    await cb.message.answer(t("q_pain", lang), reply_markup=HIDE_KB)
+    # Сначала меняем состояние, потом задаём вопрос — исключает «зависания»
     await state.set_state(Survey.pain)
+    await cb.message.answer(t("q_pain", lang), reply_markup=HIDE_KB)
     await cb.answer()
 
-# 3) Боли
-@rt.message(Survey.pain)
+# ---------- Шаг 3: Боли ----------
+@rt.message(Survey.pain, F.text.len() > 0)
 async def step_pain(m: Message, state: FSMContext):
     lang = await get_lang(state)
-    if not m.text or m.text.lower() in {"отменить", "bekor qilish"}:
-        return await cancel(m, state)
     await state.update_data(pain_points=m.text.strip())
-    await m.answer(t("q_expect", lang), reply_markup=HIDE_KB)
-    await state.set_state(Survey.expect)
+    await state.set_state(Survey.expect)                 # <-- сначала состояние
+    await m.answer(t("q_expect", lang), reply_markup=HIDE_KB)  # затем вопрос
 
-# 4) Ожидания
-@rt.message(Survey.expect)
+@rt.message(Survey.pain)
+async def step_pain_need_text(m: Message, state: FSMContext):
+    lang = await get_lang(state)
+    await m.answer(t("need_text", lang), reply_markup=HIDE_KB)
+
+# ---------- Шаг 4: Ожидания ----------
+@rt.message(Survey.expect, F.text.len() > 0)
 async def step_expect(m: Message, state: FSMContext):
     lang = await get_lang(state)
-    if not m.text or m.text.lower() in {"отменить", "bekor qilish"}:
-        return await cancel(m, state)
     await state.update_data(expectations=m.text.strip())
-    await m.answer(t("q_contact", lang), reply_markup=HIDE_KB)
     await state.set_state(Survey.contact)
+    await m.answer(t("q_contact", lang), reply_markup=HIDE_KB)
 
-# 5) Контакт + запись
-@rt.message(Survey.contact)
+@rt.message(Survey.expect)
+async def step_expect_need_text(m: Message, state: FSMContext):
+    lang = await get_lang(state)
+    await m.answer(t("need_text", lang), reply_markup=HIDE_KB)
+
+# ---------- Шаг 5: Контакт + запись ----------
+@rt.message(Survey.contact, F.text.len() > 0)
 async def step_contact(m: Message, state: FSMContext):
     lang = await get_lang(state)
     contact = normalize_contact(m.text or "")
@@ -347,10 +314,7 @@ async def step_contact(m: Message, state: FSMContext):
         return ", ".join(options[i] for i in sorted(set(idxs))) if idxs else ""
 
     row = [
-        now_ts(),
-        str(user.id),
-        (user.username or ""),
-        lang,
+        now_ts(), str(user.id), (user.username or ""), lang,
         data.get("agg_interest", ""),
         map_multi("vals_idx", opts("AGG_VALUES", lang)),
         data.get("pain_points", ""),
@@ -366,7 +330,6 @@ async def step_contact(m: Message, state: FSMContext):
         await m.answer(warn)
         return
 
-    # Алерт админам
     summary = (
         f"<b>[{lang.upper()}] Новая анкета</b>\n"
         f"Интерес: {data.get('agg_interest')}\n"
@@ -384,6 +347,11 @@ async def step_contact(m: Message, state: FSMContext):
 
     await m.answer(t("thanks", lang), reply_markup=ReplyKeyboardRemove())
     await state.clear()
+
+@rt.message(Survey.contact)
+async def step_contact_need_text(m: Message, state: FSMContext):
+    lang = await get_lang(state)
+    await m.answer(t("need_text", lang), reply_markup=HIDE_KB)
 
 # ---------- FastAPI / webhook ----------
 app = FastAPI()
@@ -408,10 +376,7 @@ async def telegram_webhook(request: Request):
 
 @app.on_event("startup")
 async def on_startup():
-    await bot.set_webhook(
-        url=WEBHOOK_URL,
-        drop_pending_updates=True,
-    )
+    await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
     log.info("Webhook set: %s", WEBHOOK_URL)
 
 @app.on_event("shutdown")
