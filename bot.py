@@ -15,8 +15,7 @@ OPTIONAL
 ADMINS=123456789,987654321              # кому слать алерты о новых анкетах
 TZ=Asia/Tashkent                        # таймзона (по умолчанию Asia/Tashkent)
 
-Render: старт
--------------
+Запуск на Render:
 uvicorn bot:app --host 0.0.0.0 --port 10000
 """
 
@@ -60,7 +59,6 @@ log = logging.getLogger("triplea.survey")
 sa_info = json.loads(SERVICE_JSON_RAW)
 gc = gspread.service_account_from_dict(sa_info)
 sh = gc.open_by_key(SHEET_ID)
-# Лист "Survey" c короткими колонками
 try:
     ws = sh.worksheet("Survey")
 except gspread.WorksheetNotFound:
@@ -80,11 +78,24 @@ TEXT: Dict[str, Dict[str, str]] = {
     "choose_lang": {RU: "Выберите язык ⤵️", UZ: "Tilni tanlang ⤵️"},
     "lang_ru": {RU: "Русский", UZ: "Ruscha"},
     "lang_uz": {RU: "Узбекский", UZ: "O‘zbekcha"},
+    # Расширенное приветствие: кто мы и что предлагаем
     "welcome": {
-        RU: "Короткий опрос (5 вопросов) про интерес к агрегатору, боли и ожидания. "
-            "Можно остановиться командой /cancel.\n\n<b>1/5 — Интересен ли агрегатор в Telegram?</b>",
-        UZ: "Qisqa so‘rov (5 ta savol): agregatorga qiziqish, og‘riqlar va kutilyotgan natijalar. "
-            "/cancel buyrug‘i bilan to‘xtatish mumkin.\n\n<b>1/5 — Telegramdagi agregator sizga qiziqmi?</b>",
+        RU: (
+            "<b>Мы — TripleA Travel</b> (стартап из Узбекистана). "
+            "Делаем <b>Telegram-агрегатор заявок</b> для турфирм: единая лента лидов, быстрые шаблоны ответов, "
+            "онлайн-оплата и базовая аналитика. Ищем 10–15 пилотных агентств, чтобы собрать обратную связь и "
+            "запустить бесплатный MVP на месяц.\n\n"
+            "Короткий опрос (5 вопросов) про интерес, боли и ожидания. Можно остановиться командой /cancel.\n\n"
+            "<b>1/5 — Интересен ли агрегатор в Telegram?</b>"
+        ),
+        UZ: (
+            "<b>Biz — TripleA Travel</b> (O‘zbekiston startapi). "
+            "Turfirmalar uchun <b>Telegramda arizalar agregatori</b> qilmoqdamiz: yagona lead-lenta, tezkor javob "
+            "shablonlari, onlayn to‘lov va oddiy analitika. Pilot uchun 10–15 ta agentlik izlaymiz, fikr-mulohaza "
+            "to‘plash va 1 oylik bepul MVP ishga tushirish uchun.\n\n"
+            "Qisqa so‘rov (5 ta savol): qiziqish, og‘riqlar va kutilyotgan natijalar. /cancel bilan to‘xtatish mumkin.\n\n"
+            "<b>1/5 — Telegramdagi agregator sizga qiziqmi?</b>"
+        ),
     },
     "cancelled": {
         RU: "Ок, опрос отменён. Можно перезапустить через /start.",
@@ -136,6 +147,9 @@ OPTIONS = {
              "Hisobot va analitika", "Mijozlar fikrlari"],
     },
 }
+
+# предсчитанные множества для фильтров (исключает «зависание»)
+AGG_INT_ALL = tuple(OPTIONS["AGG_INT"][RU] + OPTIONS["AGG_INT"][UZ])
 
 # ---------- FSM ----------
 class Survey(StatesGroup):
@@ -215,14 +229,16 @@ async def pick_lang(cb: CallbackQuery, state: FSMContext):
     await state.update_data(lang=lang)
     await cb.message.edit_reply_markup(reply_markup=None)
     # Первый вопрос
-    await cb.message.answer(t("welcome", lang), reply_markup=kb_rows(opts("AGG_INT", lang), lang))
+    await cb.message.answer(
+        t("welcome", lang),
+        reply_markup=kb_rows(opts("AGG_INT", lang), lang),
+    )
     await state.set_state(Survey.agg_interest)
     await cb.answer()
 
 @rt.message(Command("cancel"))
 async def cancel(m: Message, state: FSMContext):
     await state.clear()
-    # ответим на двух языках, чтобы точно понять
     await m.answer(TEXT["cancelled"][RU], reply_markup=HIDE_KB)
 
 @rt.message(Command("help"))
@@ -233,7 +249,8 @@ async def help_cmd(m: Message, state: FSMContext):
     await m.answer(txt)
 
 # ---------- Шаги ----------
-@rt.message(Survey.agg_interest, F.text.func(lambda v: v in OPTIONS["AGG_INT"][RU] + OPTIONS["AGG_INT"][UZ]))
+# 1) Интерес
+@rt.message(Survey.agg_interest, F.text.in_(AGG_INT_ALL))
 async def step_agg_interest(m: Message, state: FSMContext):
     lang = await get_lang(state)
     await state.update_data(agg_interest=m.text)
@@ -243,6 +260,13 @@ async def step_agg_interest(m: Message, state: FSMContext):
     await m.answer(t("q_vals_open", lang), reply_markup=open_btn)
     await state.set_state(Survey.agg_values)
 
+# Fallback на случай произвольного текста (чтобы бот не «молчал»)
+@rt.message(Survey.agg_interest)
+async def step_agg_interest_retry(m: Message, state: FSMContext):
+    lang = await get_lang(state)
+    await m.answer(t("q_agg_int", lang), reply_markup=kb_rows(opts("AGG_INT", lang), lang))
+
+# 2) Ценности (мультивыбор)
 @rt.callback_query(Survey.agg_values, F.data == "vals:open")
 async def vals_open(cb: CallbackQuery, state: FSMContext):
     lang = await get_lang(state)
@@ -268,7 +292,7 @@ async def toggle_multi(cb: CallbackQuery, state: FSMContext, key: str, options: 
             rows.append([InlineKeyboardButton(text=f"{mark} {o}", callback_data=f"{prefix}:toggle:{i}")])
         lang = (await state.get_data()).get("lang", RU)
         rows.append([InlineKeyboardButton(text=t("done", lang), callback_data=f"{prefix}:done")])
-        # Важно: именованный аргумент
+        # Именованный аргумент: иначе pydantic_core будет ругаться
         await cb.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
         await cb.answer()
     elif action == "done":
@@ -288,6 +312,7 @@ async def vals_done(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Survey.pain)
     await cb.answer()
 
+# 3) Боли
 @rt.message(Survey.pain)
 async def step_pain(m: Message, state: FSMContext):
     lang = await get_lang(state)
@@ -297,6 +322,7 @@ async def step_pain(m: Message, state: FSMContext):
     await m.answer(t("q_expect", lang), reply_markup=HIDE_KB)
     await state.set_state(Survey.expect)
 
+# 4) Ожидания
 @rt.message(Survey.expect)
 async def step_expect(m: Message, state: FSMContext):
     lang = await get_lang(state)
@@ -306,6 +332,7 @@ async def step_expect(m: Message, state: FSMContext):
     await m.answer(t("q_contact", lang), reply_markup=HIDE_KB)
     await state.set_state(Survey.contact)
 
+# 5) Контакт + запись
 @rt.message(Survey.contact)
 async def step_contact(m: Message, state: FSMContext):
     lang = await get_lang(state)
@@ -339,7 +366,7 @@ async def step_contact(m: Message, state: FSMContext):
         await m.answer(warn)
         return
 
-    # Алерт админам (кратко)
+    # Алерт админам
     summary = (
         f"<b>[{lang.upper()}] Новая анкета</b>\n"
         f"Интерес: {data.get('agg_interest')}\n"
