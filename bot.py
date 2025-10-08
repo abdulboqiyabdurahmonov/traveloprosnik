@@ -385,3 +385,12 @@ async def on_shutdown():
         await bot.delete_webhook(drop_pending_updates=False)
     except Exception:
         pass
+
+@app.head("/", include_in_schema=False)
+async def root_head():
+    return PlainTextResponse("", status_code=200)
+
+
+
+
+
