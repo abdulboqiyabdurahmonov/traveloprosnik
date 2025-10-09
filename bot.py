@@ -140,6 +140,33 @@ OPTIONS = {
     },
 }
 
+# ДОБАВЬ К СУЩЕСТВУЮЩЕМУ OPTIONS
+OPTIONS.update({
+    "PAINS": {
+        RU: [
+            "Мало заявок", "Дорогие лиды", "Долгие ответы менеджеров",
+            "Хаос в переписках", "Нет онлайн-оплаты", "Нет аналитики"
+        ],
+        UZ: [
+            "Arizalar kam", "Lidlar qimmat", "Menejer javobi sekin",
+            "Chatlar tartibsiz", "Onlayn to‘lov yo‘q", "Analitika yo‘q"
+        ],
+    },
+    "EXPECTS": {
+        RU: [
+            "+30% лидов/мес", "Сократить время ответа < 5 мин",
+            "Единая лента без хаоса", "Онлайн-оплата работает",
+            "Базовые отчёты/дашборд"
+        ],
+        UZ: [
+            "Oyiga +30% lid", "Javob vaqti < 5 daqiqa",
+            "Yagona lenta, tartib", "Onlayn to‘lov ishlaydi",
+            "Oddiy hisobot/dashbord"
+        ],
+    },
+})
+
+
 AGG_INT_ALL = tuple(OPTIONS["AGG_INT"][RU] + OPTIONS["AGG_INT"][UZ])
 HIDE_KB = ReplyKeyboardRemove(remove_keyboard=True)
 
@@ -189,6 +216,20 @@ def normalize_contact(txt: str) -> str:
     if t_.startswith("@") and len(t_) > 1: return t_
     digits = "".join(ch for ch in t_ if ch.isdigit() or ch == "+")
     return digits if digits else t_
+
+def share_phone_kb(lang: str) -> ReplyKeyboardMarkup:
+    btn = KeyboardButton(text="📱 Поделиться телефоном" if lang==RU else "📱 Telefonni ulashish",
+                         request_contact=True)
+    return ReplyKeyboardMarkup(keyboard=[[btn], [KeyboardButton(text=t("cancel_btn", lang))]],
+                               resize_keyboard=True)
+
+def inline_multi_with_other(options: List[str], lang: str, prefix: str) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=f"▫️ {o}", callback_data=f"{prefix}:toggle:{i}")]
+            for i, o in enumerate(options)]
+    rows.append([InlineKeyboardButton(text=("Другое ✍️" if lang==RU else "Boshqa ✍️"),
+                                      callback_data=f"{prefix}:other")])
+    rows.append([InlineKeyboardButton(text=t("done", lang), callback_data=f"{prefix}:done")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 # ---------- Команды ----------
 @rt.message(CommandStart())
@@ -268,10 +309,13 @@ async def vals_toggle(cb: CallbackQuery, state: FSMContext):
 async def vals_done(cb: CallbackQuery, state: FSMContext):
     lang = await get_lang(state)
     await cb.message.edit_reply_markup(reply_markup=None)
-    # Сначала меняем состояние, потом задаём вопрос — исключает «зависания»
     await state.set_state(Survey.pain)
-    await cb.message.answer(t("q_pain", lang), reply_markup=HIDE_KB)
+    await cb.message.answer(
+        t("q_pain", lang).split("\n")[0],  # заголовок без "(свободный ответ)"
+        reply_markup=inline_multi_with_other(opts("PAINS", lang), lang, "pain")
+    )
     await cb.answer()
+
 
 # ---------- Шаг 3: Боли ----------
 @rt.message(Survey.pain, F.text.len() > 0)
@@ -286,25 +330,82 @@ async def step_pain_need_text(m: Message, state: FSMContext):
     lang = await get_lang(state)
     await m.answer(t("need_text", lang), reply_markup=HIDE_KB)
 
+@rt.callback_query(Survey.pain, F.data.startswith("pain:toggle:"))
+async def pain_toggle(cb: CallbackQuery, state: FSMContext):
+    await toggle_multi(cb, state, "pain_idx", opts("PAINS", await get_lang(state)), "pain")
+
+@rt.callback_query(Survey.pain, F.data == "pain:other")
+async def pain_other(cb: CallbackQuery, state: FSMContext):
+    lang = await get_lang(state)
+    await state.update_data(waiting_pain_other=True)
+    await cb.message.answer("Опишите кратко «Другое»:" if lang==RU else "Qisqa «Boshqa» yozing:")
+    await cb.answer()
+
+@rt.message(Survey.pain, F.text.len() > 0)
+async def pain_other_text(m: Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("waiting_pain_other"):
+        await state.update_data(waiting_pain_other=False, pain_other=m.text.strip())
+        # остаёмся на pain, ждём «Готово»
+        return
+    # если вдруг человек просто пишет — сохраним как pain_other
+
+@rt.callback_query(Survey.pain, F.data == "pain:done")
+async def pain_done(cb: CallbackQuery, state: FSMContext):
+    lang = await get_lang(state)
+    await cb.message.edit_reply_markup(reply_markup=None)
+    await state.set_state(Survey.expect)
+    await cb.message.answer(
+        t("q_expect", lang).split("\n")[0],
+        reply_markup=inline_multi_with_other(opts("EXPECTS", lang), lang, "exp")
+    )
+    await cb.answer()
+
 # ---------- Шаг 4: Ожидания ----------
 @rt.message(Survey.expect, F.text.len() > 0)
 async def step_expect(m: Message, state: FSMContext):
     lang = await get_lang(state)
-    await state.update_data(expectations=m.text.strip())
+    await state.update_data(expectations_free=m.text.strip())
     await state.set_state(Survey.contact)
-    await m.answer(t("q_contact", lang), reply_markup=HIDE_KB)
+    await m.answer(t("q_contact", lang), reply_markup=share_phone_kb(lang))
 
 @rt.message(Survey.expect)
 async def step_expect_need_text(m: Message, state: FSMContext):
     lang = await get_lang(state)
     await m.answer(t("need_text", lang), reply_markup=HIDE_KB)
 
+@rt.callback_query(Survey.expect, F.data.startswith("exp:toggle:"))
+async def exp_toggle(cb: CallbackQuery, state: FSMContext):
+    await toggle_multi(cb, state, "exp_idx", opts("EXPECTS", await get_lang(state)), "exp")
+
+@rt.callback_query(Survey.expect, F.data == "exp:other")
+async def exp_other(cb: CallbackQuery, state: FSMContext):
+    lang = await get_lang(state)
+    await state.update_data(waiting_exp_other=True)
+    await cb.message.answer("Опишите «Другое» ожидание:" if lang==RU else "«Boshqa» kutilmalarni yozing:")
+    await cb.answer()
+
+@rt.message(Survey.expect, F.text.len() > 0)
+async def exp_other_text(m: Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("waiting_exp_other"):
+        await state.update_data(waiting_exp_other=False, exp_other=m.text.strip())
+        return
+
+@rt.callback_query(Survey.expect, F.data == "exp:done")
+async def exp_done(cb: CallbackQuery, state: FSMContext):
+    lang = await get_lang(state)
+    await cb.message.edit_reply_markup(reply_markup=None)
+    await state.set_state(Survey.contact)
+    await cb.message.answer(t("q_contact", lang), reply_markup=share_phone_kb(lang))
+    await cb.answer()
+
 # ---------- Шаг 5: Контакт + запись ----------
 @rt.message(Survey.contact, F.text.len() > 0)
 async def step_contact(m: Message, state: FSMContext):
     lang = await get_lang(state)
-    contact = normalize_contact(m.text or "")
-    await state.update_data(contact=contact)
+    await state.update_data(contact=normalize_contact(m.text or ""))
+    await finalize_and_save(m, state, lang)
 
     data = await state.get_data()
     user = m.from_user
@@ -352,6 +453,64 @@ async def step_contact(m: Message, state: FSMContext):
 async def step_contact_need_text(m: Message, state: FSMContext):
     lang = await get_lang(state)
     await m.answer(t("need_text", lang), reply_markup=HIDE_KB)
+
+from aiogram.types import ContentType
+
+@rt.message(Survey.contact, F.contact)
+async def step_contact_shared(m: Message, state: FSMContext):
+    lang = await get_lang(state)
+    phone = m.contact.phone_number
+    await state.update_data(contact=phone)
+    await finalize_and_save(m, state, lang)
+
+async def finalize_and_save(m: Message, state: FSMContext, lang: str):
+    data = await state.get_data()
+    user = m.from_user
+
+    def join_multi(idx_key: str, options: List[str], other_key: str) -> str:
+        idxs = data.get(idx_key, [])
+        base = [options[i] for i in sorted(set(idxs))] if idxs else []
+        if data.get(other_key):
+            base.append(f"Другое: {data[other_key]}")
+        return ", ".join(base)
+
+    # Если контакт не задан — авто-подхватим username
+    contact = data.get("contact") or (m.text if getattr(m, "text", None) else None) \
+              or (("@"+user.username) if user.username else "")
+    await state.update_data(contact=normalize_contact(contact))
+
+    row = [
+        now_ts(), str(user.id), (user.username or ""), lang,
+        data.get("agg_interest", ""),
+        join_multi("vals_idx", opts("AGG_VALUES", lang), other_key="vals_other"),  # если добавишь «Другое» и сюда
+        join_multi("pain_idx", opts("PAINS", lang), other_key="pain_other"),
+        join_multi("exp_idx",  opts("EXPECTS", lang), other_key="exp_other"),
+        data.get("contact", ""),
+    ]
+    try:
+        ws.append_row(row)
+    except Exception:
+        log.exception("Append to sheet failed")
+        warn = "⚠️ Ошибка сохранения в таблицу. Попробуйте позже." if lang == RU \
+            else "⚠️ Jadvalga saqlashda xatolik. Keyinroq urinib ko‘ring."
+        await m.answer(warn)
+        return
+
+    summary = (
+        f"<b>[{lang.upper()}] Новая анкета</b>\n"
+        f"Интерес: {data.get('agg_interest')}\n"
+        f"Ценности: {join_multi('vals_idx', opts('AGG_VALUES', lang), 'vals_other')}\n"
+        f"Боли: {join_multi('pain_idx', opts('PAINS', lang), 'pain_other')}\n"
+        f"Ожидания: {join_multi('exp_idx', opts('EXPECTS', lang), 'exp_other')}\n"
+        f"Контакт: {data.get('contact')}\n"
+        f"— @{user.username or '—'} | {user.id}"
+    )
+    for admin_id in ADMINS:
+        try: await bot.send_message(admin_id, summary)
+        except Exception: pass
+
+    await m.answer(t("thanks", lang), reply_markup=ReplyKeyboardRemove())
+    await state.clear()
 
 # ---------- FastAPI / webhook ----------
 app = FastAPI()
