@@ -318,18 +318,6 @@ async def vals_done(cb: CallbackQuery, state: FSMContext):
 
 
 # ---------- Шаг 3: Боли ----------
-@rt.message(Survey.pain, F.text.len() > 0)
-async def step_pain(m: Message, state: FSMContext):
-    lang = await get_lang(state)
-    await state.update_data(pain_points=m.text.strip())
-    await state.set_state(Survey.expect)                 # <-- сначала состояние
-    await m.answer(t("q_expect", lang), reply_markup=HIDE_KB)  # затем вопрос
-
-@rt.message(Survey.pain)
-async def step_pain_need_text(m: Message, state: FSMContext):
-    lang = await get_lang(state)
-    await m.answer(t("need_text", lang), reply_markup=HIDE_KB)
-
 @rt.callback_query(Survey.pain, F.data.startswith("pain:toggle:"))
 async def pain_toggle(cb: CallbackQuery, state: FSMContext):
     await toggle_multi(cb, state, "pain_idx", opts("PAINS", await get_lang(state)), "pain")
@@ -338,17 +326,24 @@ async def pain_toggle(cb: CallbackQuery, state: FSMContext):
 async def pain_other(cb: CallbackQuery, state: FSMContext):
     lang = await get_lang(state)
     await state.update_data(waiting_pain_other=True)
-    await cb.message.answer("Опишите кратко «Другое»:" if lang==RU else "Qisqa «Boshqa» yozing:")
+    await cb.message.answer("Опишите кратко «Другое»:" if lang == RU else "Qisqa «Boshqa» yozing:")
     await cb.answer()
 
 @rt.message(Survey.pain, F.text.len() > 0)
-async def pain_other_text(m: Message, state: FSMContext):
+async def pain_text(m: Message, state: FSMContext):
+    lang = await get_lang(state)
     data = await state.get_data()
+    # Если ждали «Другое» — сохраняем как pain_other и остаёмся на шаге до нажатия «Готово»
     if data.get("waiting_pain_other"):
         await state.update_data(waiting_pain_other=False, pain_other=m.text.strip())
-        # остаёмся на pain, ждём «Готово»
         return
-    # если вдруг человек просто пишет — сохраним как pain_other
+    # Иначе трактуем как свободный ответ и переходим к ожиданиям (как раньше)
+    await state.update_data(pain_points=m.text.strip())
+    await state.set_state(Survey.expect)
+    await m.answer(
+        t("q_expect", lang).split("\n")[0],
+        reply_markup=inline_multi_with_other(opts("EXPECTS", lang), lang, "exp")
+    )
 
 @rt.callback_query(Survey.pain, F.data == "pain:done")
 async def pain_done(cb: CallbackQuery, state: FSMContext):
@@ -362,18 +357,6 @@ async def pain_done(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 # ---------- Шаг 4: Ожидания ----------
-@rt.message(Survey.expect, F.text.len() > 0)
-async def step_expect(m: Message, state: FSMContext):
-    lang = await get_lang(state)
-    await state.update_data(expectations_free=m.text.strip())
-    await state.set_state(Survey.contact)
-    await m.answer(t("q_contact", lang), reply_markup=share_phone_kb(lang))
-
-@rt.message(Survey.expect)
-async def step_expect_need_text(m: Message, state: FSMContext):
-    lang = await get_lang(state)
-    await m.answer(t("need_text", lang), reply_markup=HIDE_KB)
-
 @rt.callback_query(Survey.expect, F.data.startswith("exp:toggle:"))
 async def exp_toggle(cb: CallbackQuery, state: FSMContext):
     await toggle_multi(cb, state, "exp_idx", opts("EXPECTS", await get_lang(state)), "exp")
@@ -382,15 +365,20 @@ async def exp_toggle(cb: CallbackQuery, state: FSMContext):
 async def exp_other(cb: CallbackQuery, state: FSMContext):
     lang = await get_lang(state)
     await state.update_data(waiting_exp_other=True)
-    await cb.message.answer("Опишите «Другое» ожидание:" if lang==RU else "«Boshqa» kutilmalarni yozing:")
+    await cb.message.answer("Опишите «Другое» ожидание:" if lang == RU else "«Boshqa» kutilmalarni yozing:")
     await cb.answer()
 
 @rt.message(Survey.expect, F.text.len() > 0)
-async def exp_other_text(m: Message, state: FSMContext):
+async def exp_text(m: Message, state: FSMContext):
+    lang = await get_lang(state)
     data = await state.get_data()
     if data.get("waiting_exp_other"):
         await state.update_data(waiting_exp_other=False, exp_other=m.text.strip())
         return
+    # Свободный ответ — как прежде, но сразу ведём на контакт
+    await state.update_data(expectations_free=m.text.strip())
+    await state.set_state(Survey.contact)
+    await m.answer(t("q_contact", lang), reply_markup=share_phone_kb(lang))
 
 @rt.callback_query(Survey.expect, F.data == "exp:done")
 async def exp_done(cb: CallbackQuery, state: FSMContext):
@@ -400,61 +388,23 @@ async def exp_done(cb: CallbackQuery, state: FSMContext):
     await cb.message.answer(t("q_contact", lang), reply_markup=share_phone_kb(lang))
     await cb.answer()
 
-# ---------- Шаг 5: Контакт + запись ----------
+# ---------- Шаг 5: Контакт ----------
 @rt.message(Survey.contact, F.text.len() > 0)
 async def step_contact(m: Message, state: FSMContext):
     lang = await get_lang(state)
     await state.update_data(contact=normalize_contact(m.text or ""))
     await finalize_and_save(m, state, lang)
 
-    data = await state.get_data()
-    user = m.from_user
-
-    def map_multi(key_idx: str, options: List[str]) -> str:
-        idxs = data.get(key_idx, [])
-        return ", ".join(options[i] for i in sorted(set(idxs))) if idxs else ""
-
-    row = [
-        now_ts(), str(user.id), (user.username or ""), lang,
-        data.get("agg_interest", ""),
-        map_multi("vals_idx", opts("AGG_VALUES", lang)),
-        data.get("pain_points", ""),
-        data.get("expectations", ""),
-        data.get("contact", ""),
-    ]
-    try:
-        ws.append_row(row)
-    except Exception:
-        log.exception("Append to sheet failed")
-        warn = "⚠️ Ошибка сохранения в таблицу. Попробуйте позже." if lang == RU \
-            else "⚠️ Jadvalga saqlashda xatolik. Keyinroq urinib ko‘ring."
-        await m.answer(warn)
-        return
-
-    summary = (
-        f"<b>[{lang.upper()}] Новая анкета</b>\n"
-        f"Интерес: {data.get('agg_interest')}\n"
-        f"Ценности: {map_multi('vals_idx', opts('AGG_VALUES', lang))}\n"
-        f"Боли: {data.get('pain_points')}\n"
-        f"Ожидания: {data.get('expectations')}\n"
-        f"Контакт: {contact}\n"
-        f"— @{user.username or '—'} | {user.id}"
-    )
-    for admin_id in ADMINS:
-        try:
-            await bot.send_message(admin_id, summary)
-        except Exception:
-            pass
-
-    await m.answer(t("thanks", lang), reply_markup=ReplyKeyboardRemove())
-    await state.clear()
+@rt.message(Survey.contact, F.contact)
+async def step_contact_shared(m: Message, state: FSMContext):
+    lang = await get_lang(state)
+    await state.update_data(contact=m.contact.phone_number)
+    await finalize_and_save(m, state, lang)
 
 @rt.message(Survey.contact)
 async def step_contact_need_text(m: Message, state: FSMContext):
     lang = await get_lang(state)
     await m.answer(t("need_text", lang), reply_markup=HIDE_KB)
-
-from aiogram.types import ContentType
 
 @rt.message(Survey.contact, F.contact)
 async def step_contact_shared(m: Message, state: FSMContext):
