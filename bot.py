@@ -217,6 +217,14 @@ def normalize_contact(txt: str) -> str:
     digits = "".join(ch for ch in t_ if ch.isdigit() or ch == "+")
     return digits if digits else t_
 
+async def hide_reply_kb(m: Message):
+    # отправляем пустышку, чтобы убрать старую reply-клаву
+    tmp = await m.answer("‎", reply_markup=HIDE_KB)  # невидимый символ
+    try:
+        await tmp.delete()
+    except Exception:
+        pass
+
 def share_phone_kb(lang: str) -> ReplyKeyboardMarkup:
     btn = KeyboardButton(text="📱 Поделиться телефоном" if lang==RU else "📱 Telefonni ulashish",
                          request_contact=True)
@@ -262,6 +270,11 @@ async def cancel(m: Message, state: FSMContext):
 async def step_agg_interest(m: Message, state: FSMContext):
     lang = await get_lang(state)
     await state.update_data(agg_interest=m.text)
+
+    # СКРЫТЬ нижнее меню (reply-клаву 1/5)
+    await hide_reply_kb(m)
+
+    # Дать инлайн-кнопку "Открыть варианты" для 2/5
     open_btn = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=t("open_variants", lang), callback_data="vals:open")
     ]])
