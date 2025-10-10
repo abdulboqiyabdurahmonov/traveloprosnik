@@ -271,14 +271,16 @@ async def step_agg_interest(m: Message, state: FSMContext):
     lang = await get_lang(state)
     await state.update_data(agg_interest=m.text)
 
-    # СКРЫТЬ нижнее меню (reply-клаву 1/5)
-    await hide_reply_kb(m)
+    # 1) Снять нижнее меню обычным сообщением (без трюков с нулевой шириной)
+    await m.answer(t("saved_choice", lang), reply_markup=ReplyKeyboardRemove(), disable_notification=True)
 
-    # Дать инлайн-кнопку "Открыть варианты" для 2/5
+    # 2) Дать инлайн-кнопку "Открыть варианты" (для шага 2/5)
     open_btn = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=t("open_variants", lang), callback_data="vals:open")
     ]])
     await m.answer(t("q_vals_open", lang), reply_markup=open_btn)
+
+    # 3) Перейти к следующему состоянию
     await state.set_state(Survey.agg_values)
 
 @rt.message(Survey.agg_interest)
